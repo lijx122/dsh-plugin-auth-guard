@@ -1,0 +1,9 @@
+# dsh-plugin-auth-guard bundle patch
+- insert:
+    - id: auth-guard
+      name: 'dsh-plugin-auth-guard'
+
+- id: webserver
+  config:
+    host: '0.0.0.0'
+    port: 3080
