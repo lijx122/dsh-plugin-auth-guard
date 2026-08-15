@@ -40,6 +40,7 @@ flowchart TD
     Client[Client Device Phone/Tablet/PC] -->|HTTP / WebSocket| Ingress[Node.js http.Server: 3080]
     Ingress --> L1[L1: Physical Socket Origin Check isPhysicalLoopback]
     L1 --> L2[L2: Enterprise Security Headers nosniff / SAMEORIGIN / Referrer / no-store]
+    L2 --> L3[L3: 64KB Payload OOM Protection]
     L3 --> L4[L4: CSRF & CSWSH Strict Hostname Comparison]
     L4 --> L5{L5: Public Whitelist Strict Regex Matching}
     
@@ -121,44 +122,89 @@ Navigate to **Settings** $ightarrow$ **Security & Access (安全与访问)**:
 
 ---
 
-## 🚀 Production Reverse Proxy Best Practice (Nginx)
+## 🚀 5 Essential Reverse Proxy Settings (Nginx / Caddy / Cloudflare)
 
-For public cloud deployments, hosting DSH behind an **Nginx HTTPS reverse proxy** is recommended:
+When deploying behind a reverse proxy, configure the following 5 settings to ensure smooth large file uploads, unbuffered streaming responses, and accurate zero-trust perimeter defense:
+
+### 1. Increase Max Body Size (Required to avoid 413)
+Nginx default `client_max_body_size` is 1MB, which rejects image and file uploads.
+- **Setting**: `client_max_body_size 160M;` (aligned with DSH 160MB upload capacity).
+
+### 2. Forward Real Client IP and Protocol (Critical for Security)
+`auth-guard` relies on these headers to distinguish local from proxied traffic and apply accurate rate-limiting:
+- **Setting**:
+  ```nginx
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  ```
+
+### 3. Enable WebSocket Protocol Upgrades (Required)
+DSH real-time conversation streams and sidebar PTY terminals require WebSocket support.
+- **Setting**:
+  ```nginx
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  ```
+
+### 4. Extend Request Timeouts (For Long AI Inferences)
+Prevents Nginx from dropping connections during long-running agent tool runs.
+- **Setting**:
+  ```nginx
+  proxy_read_timeout 3600s;
+  proxy_send_timeout 3600s;
+  ```
+
+### 5. Disable Response Buffering (For Real-Time Token Streaming)
+Ensures tokens stream to the browser character-by-character without proxy-level buffering delays.
+- **Setting**: `proxy_buffering off;`
+
+---
+
+## 📑 Production-Ready Nginx Configuration Template
 
 ```nginx
+# 1. HTTP -> HTTPS Redirect
 server {
     listen 80;
-    server_name ai.yourdomain.com;
+    server_name dsh.yourdomain.com;
     return 301 https://$host$request_uri;
 }
 
+# 2. HTTPS Proxy Core
 server {
     listen 443 ssl http2;
-    server_name ai.yourdomain.com;
+    server_name dsh.yourdomain.com;
 
-    ssl_certificate     /etc/nginx/ssl/ai.yourdomain.com.crt;
-    ssl_certificate_key /etc/nginx/ssl/ai.yourdomain.com.key;
+    # SSL Certificates
+    ssl_certificate     /etc/nginx/ssl/dsh.yourdomain.com.crt;
+    ssl_certificate_key /etc/nginx/ssl/dsh.yourdomain.com.key;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
+    # [Key 1] Allow up to 160MB file uploads
     client_max_body_size 160M;
 
     location / {
         proxy_pass http://127.0.0.1:3080;
         proxy_http_version 1.1;
 
-        # WebSocket Upgrade Headers (Mandatory)
+        # [Key 2] WebSocket Upgrade Support
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
 
-        # Proxy Origin Headers
+        # [Key 3] Real IP and Scheme Forwarding
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Proto $scheme;
 
+        # [Key 4 & 5] Timeout & Unbuffered Real-time Token Streaming
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+        proxy_buffering off;
     }
 }
 ```

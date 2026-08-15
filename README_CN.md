@@ -22,7 +22,7 @@
 
 ## 📖 痛点与背景（为什么需要此插件？）
 
-DeepSeek Harness (DSH) 是一款出色的本地 AI Coding Agent 框架。由于原生定位主要面向单机桌面开发（`127.0.0.1` 本机环境），当开发者尝试在**局域网多设备（如手机/平板/办公室电脑）或云服务器公网部署**时，会面临三大核心痛点与重大安全隐患：
+DeepSeek Harness (DSH) 是一款出色的本地 AI Coding Agent 框架。由于原生定位主要面向单机桌面开发（`127.0.0.1` 本机环境），当开发者尝试在**局域网多设备（如手机/平板/办公室电脑）或云服务器公网部署**时，会面临四大核心痛点与重大安全隐患：
 
 1. **特权接口 403 拦截**：DSH 核心源码中硬编码了回环安全栅栏，只要非 `127.0.0.1` 访问，模型配置读取（`settings.describe`）和提供商列表（`llm.providers`）一律被服务端强制返回 `403 Forbidden`，导致跨设备无法切换或配置模型。
 2. **移动端非 HTTPS 运行崩溃**：iOS Safari 和 Android 移动端浏览器在非 HTTPS 局域网环境下，因缺少安全上下文（Secure Context）导致 `crypto.randomUUID` 为空，前端 RPC 通信全线瘫痪。
@@ -123,48 +123,93 @@ dsh plugin --profile web add github:lijx122/dsh-plugin-auth-guard
 
 ---
 
-## 🚀 生产环境反向代理最佳实践 (Nginx 配置范例)
+## 🚀 反向代理（如 Nginx）环境下必须做的 5 项关键设置
 
-若计划在云服务器上通过公网域名提供服务，建议在前端配置 **Nginx 开启 HTTPS 反向代理**：
+在反代（Nginx / Caddy / Traefik / Cloudflare）环境下，为了让大文件上传畅通、AI 流式打字不卡顿、同时让安全网关精准防御，必须做以下 5 项针对性配置：
+
+### 1. 放开反代自身的文件上传大小（必配，否则报 413）
+Nginx 默认的 `client_max_body_size` 只有 1MB。上传稍大一点的图片、代码仓库压缩包或附件就会被 Nginx 直接拦截。
+- **设置**：`client_max_body_size 160M;`（与 DSH 允许的最大体量 160MB 对齐）。
+
+### 2. 透传客户端真实 IP 与协议（安全核心，必配）
+`auth-guard` 在底层判断连接是“物理本机直连”还是“外部反代”依赖这些 Header：
+- 如果不传 `X-Real-IP` 和 `X-Forwarded-For`，插件拿到的底层 TCP 地址全是 `127.0.0.1`（因为连接是 Nginx 发起的），会导致外网防爆破限流失效，或误将外网访客判定为本机。
+- **设置**：
+  ```nginx
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  ```
+
+### 3. 启用 WebSocket 协议升级（必配）
+DSH 的前端实时通信、代码执行输出流以及终端 PTY 全部依赖 WebSocket。
+- **设置**：
+  ```nginx
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  ```
+
+### 4. 延长长连接超时时间（避免 AI 思考时连接被切断）
+AI 在进行复杂任务或长思考推理时，单次请求可能持续数分钟，Nginx 默认 60 秒无数据会自动切断连接。
+- **设置**：
+  ```nginx
+  proxy_read_timeout 3600s;
+  proxy_send_timeout 3600s;
+  ```
+
+### 5. 关闭响应缓冲（提升流式打字输出体验）
+让 AI 的回复能够实时逐字推送到浏览器，而不是被 Nginx 缓存一块后批量卡顿输出。
+- **设置**：`proxy_buffering off;`
+
+---
+
+## 📑 生产级 Nginx 完整配置范例
+
+如果使用 Nginx 进行 HTTPS 反向代理，可以直接使用以下配置模板：
 
 ```nginx
-# Nginx 生产环境 HTTPS 反向代理配置范例
+# 1. HTTP 强制跳转 HTTPS
 server {
     listen 80;
-    server_name ai.yourdomain.com;
+    server_name dsh.yourdomain.com;
     return 301 https://$host$request_uri;
 }
 
+# 2. HTTPS 核心反代配置
 server {
     listen 443 ssl http2;
-    server_name ai.yourdomain.com;
+    server_name dsh.yourdomain.com;
 
     # SSL 证书配置
-    ssl_certificate     /etc/nginx/ssl/ai.yourdomain.com.crt;
-    ssl_certificate_key /etc/nginx/ssl/ai.yourdomain.com.key;
+    ssl_certificate     /etc/nginx/ssl/dsh.yourdomain.com.crt;
+    ssl_certificate_key /etc/nginx/ssl/dsh.yourdomain.com.key;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
-    # 请求体限制（与 DSH 大附件上传对齐）
+    # 【关键设置 1】允许最大 160MB 文件与大附件上传
     client_max_body_size 160M;
 
     location / {
+        # 转发到本地 DSH 端口
         proxy_pass http://127.0.0.1:3080;
         proxy_http_version 1.1;
 
-        # 必须传递 WebSocket 协议升级头
+        # 【关键设置 2】WebSocket 协议支持
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
 
-        # 传递真实客户端信息（本插件已适配防反代伪造解析）
+        # 【关键设置 3】真实 IP 与域名透传（供 auth-guard 安全网关识别与精准防爆破）
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Proto $scheme;
 
-        # 保持长连接超时时间（适配 AI 长时间推理输出）
+        # 【关键设置 4】超时与流式打字输出配置
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+        proxy_buffering off;
     }
 }
 ```
