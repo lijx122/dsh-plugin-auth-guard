@@ -7,3 +7,6 @@
   config:
     host: '0.0.0.0'
     port: 3080
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024

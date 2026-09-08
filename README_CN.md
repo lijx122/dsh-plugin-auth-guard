@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="https://github.com/lijx122/dsh-plugin-auth-guard/releases"><img src="https://img.shields.io/badge/Version-v0.1.1-green.svg" alt="Version: 0.1.1"></a>
+  <a href="https://github.com/lijx122/dsh-plugin-auth-guard/releases"><img src="https://img.shields.io/badge/Version-v0.2.0_(DSH_v0.1.2--rc.1_Ready)-green.svg" alt="Version: 0.2.0"></a>
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/DSH-Plugin%20Bundle-blueviolet" alt="DSH Bundle"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D20-brightgreen.svg" alt="Node.js: >=20"></a>
   <img src="https://img.shields.io/badge/Security-8_Rounds_Zero--Trust_Audited-success.svg" alt="Security Audited">
